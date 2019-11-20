@@ -1,0 +1,126 @@
+---
+title: "How can we match you to your dream job?"
+author: "Martius Eduardo"
+date: "11/19/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(sqldf)
+library(tidyverse)
+```
+
+##How can we match you to your dream job?
+
+First, we need read the 4 tables.
+
+```{r read_tables}
+AvailableCandidates <- read_csv("~/Visual Studio 2017/Projects/VanHackathon/AvailableCandidates.csv")
+HiredCandidates <- read_csv("~/Visual Studio 2017/Projects/VanHackathon/HiredCandidates.csv")
+HiredJobDetails <- read_csv("~/Visual Studio 2017/Projects/VanHackathon/HiredJobDetails.csv")
+JobsToPredict <- read_csv("~/Visual Studio 2017/Projects/VanHackathon/JobsToPredict.csv")
+```
+
+With the tables like that, we can't do anything. So, we need to calculate the SkillsByJob that means how many skills the candidate has for each job. After that we need to calculate how many skills the candidate has (CandidateSkills) and how many skills the jobs needs (JobSkills).
+
+```{r creating_columns}
+skillsHiredCandidates <- strsplit(HiredCandidates$Skills, ", ")
+NewHiredCandidates <- data.frame(UserId = rep(HiredCandidates$UserId, sapply(skillsHiredCandidates, length)), HiredForJobId = rep(HiredCandidates$HiredForJobId, sapply(skillsHiredCandidates, length)), Skills = unlist(skillsHiredCandidates), UsersPosition = rep(HiredCandidates$UsersPosition, sapply(skillsHiredCandidates, length)))
+
+NewHiredCandidates2 <- NewHiredCandidates %>% count(UserId, HiredForJobId, UsersPosition)
+
+skillsHiredJobDetails <- strsplit(HiredJobDetails$Skills, ", ")
+NewHiredJobDetails <- data.frame(JobId = rep(HiredJobDetails$JobId, sapply(skillsHiredJobDetails, length)), POSITION = rep(HiredJobDetails$POSITION, sapply(skillsHiredJobDetails, length)), Skills = unlist(skillsHiredJobDetails))
+
+NewHiredJobDetails2 <- NewHiredJobDetails %>% count(JobId, POSITION)
+
+CountSkills <- sqldf("Select nhc.UserId, nhjd.JobId, SUM(CASE WHEN nhc.Skills=nhjd.Skills THEN 1 ELSE 0 END) AS SkillsByJobs, (Select nhc2.n From NewHiredCandidates2 AS nhc2 Where nhc2.UserId = nhc.UserId) As CandidateSkills, (Select nhjd2.n From NewHiredJobDetails2 AS nhjd2 WHere nhjd2.JobId = nhjd.JobId) AS JobSkills
+                     From NewHiredCandidates AS nhc
+                     Inner Join NewHiredJobDetails AS nhjd
+                     Where nhc.HiredForJobId = nhjd.JobId
+                     Group by nhc.UserId")
+
+CountSkills <- CountSkills %>% mutate(Class = "Hired")
+
+#----------------------------------------------------------------------------------------
+
+skillsCandidates <- strsplit(AvailableCandidates$Skills, ", ")
+NewAvailableCandidates <- data.frame(UserId = rep(AvailableCandidates$UserId, sapply(skillsCandidates, length)), Skills = unlist(skillsCandidates), UsersPosition = rep(AvailableCandidates$UsersPosition, sapply(skillsCandidates, length)), YearsOfExperience = rep(AvailableCandidates$YearsOfExperience, sapply(skillsCandidates, length)), EnglishLevel = rep(AvailableCandidates$EnglishLevel, sapply(skillsCandidates, length)))
+
+NewAvailableCandidates2 <- NewAvailableCandidates %>% count(UserId, UsersPosition, YearsOfExperience, EnglishLevel)
+
+skillsJobsToPredict <- strsplit(JobsToPredict$Skills, ", ")
+NewJobsToPredict <- data.frame(JobId = rep(JobsToPredict$JobId, sapply(skillsJobsToPredict, length)), POSITION = rep(JobsToPredict$POSITION, sapply(skillsJobsToPredict, length)), Skills = unlist(skillsJobsToPredict))
+
+NewJobsToPredict2 <- NewJobsToPredict %>% count(JobId, POSITION)
+
+CountSkillsAvailable <- data.frame(UserId = NA, JobId = NA, SkillsByJobs = NA, CandidateSkills = NA, JobSkills = NA) %>% na.omit()
+
+#I used for because R does not support FULL OUTER JOIN and RIGHT JOIN
+for (id in JobsToPredict$JobId) {
+  CountSkillsAvailable2 <- sqldf(paste(paste("Select nac.UserId, njtp.JobId, SUM(CASE WHEN nac.Skills=njtp.Skills THEN 1 ELSE 0 END) AS SkillsByJobs, (Select nac2.n From NewAvailableCandidates2 AS nac2 Where nac2.UserId = nac.UserId) As CandidateSkills, (Select njtp2.n From NewJobsToPredict2 AS njtp2 WHere njtp2.JobId = njtp.JobId) AS JobSkills
+                     From NewAvailableCandidates AS nac, NewJobsToPredict AS njtp
+                     Where njtp.JobId = ", id), "Group by nac.UserId"))
+  
+  CountSkillsAvailable <- full_join(CountSkillsAvailable, CountSkillsAvailable2, by = c("UserId", "JobId", "SkillsByJobs", "CandidateSkills", "JobSkills"))
+}
+
+CountSkillsAvailable <- CountSkillsAvailable %>% mutate(Class = "Not Hired")
+
+#--------------------------------------------------------------------------------------------
+
+CountSkillsTotal <- full_join(CountSkillsAvailable, CountSkills, by = c("UserId", "JobId", "SkillsByJobs", "CandidateSkills", "JobSkills", "Class"))
+
+CountSkillsTotal <- CountSkillsTotal %>% mutate(ClassDummy = if_else(Class == "Hired", 1, 0))
+
+#--------------------------------------------------------------------------------------------
+head(CountSkillsTotal, 10)
+```
+
+
+In machine learning we have some tasks, how:
+
+* Classification
+  +Bayes
+  +Rules
+  +Decision Trees
+* Grouping
+  +By Density
+  +Prototype based (K-means; K-medoids)
+* Association rules
+  +Apriori
+  +FP Growth
+
+We want the 10 bests candidates for each job. Without machine learning algorithm we can tell that: candidates that has more SkillsByJobs is better for the job. We can take top 10 candidates that has more SkillsByJobs. But I created a graphic about this columns to see if I find something.
+
+```{r plot_about_skills}
+plot(CountSkillsTotal[,1:5])
+```
+
+We can see that we can use regression. See SkillsByJobs with JobSkills. If we use just hired candidates we can see that:
+
+```{r plot_about_skills_hired_candidates}
+plot(CountSkillsTotal[CountSkillsTotal$Class=="Hired",][,1:5])
+```
+
+There is a little difference with SkillsByJobs with CandidateSkills, then I tried to do a regression.
+
+```{r regression}
+modelo <- lm(ClassDummy ~ SkillsByJobs + CandidateSkills + JobSkills, data = CountSkillsTotal)
+summary(modelo)
+```
+
+
+```{r calculating_regression}
+CountSkillsRegression <- CountSkillsTotal %>% mutate(y = -0.005926 + 0.005052*SkillsByJobs + 0.00003424*CandidateSkills + 0.0006583*JobSkills)
+head(CountSkillsRegression, 10)
+```
+
+We can sort by y and take the top 10 candidates for each JobId.
+
+## Conclusion
+
+I think the best way to match you to your job dream is see the SkillsByJobs and JobSkills. If has more SkillsByJobs, then he is a match.
+
